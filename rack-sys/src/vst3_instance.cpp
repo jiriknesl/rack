@@ -6,6 +6,7 @@
 #include "public.sdk/source/vst/hosting/parameterchanges.h"
 #include "public.sdk/source/vst/hosting/eventlist.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
+#include "pluginterfaces/vst/vstspeaker.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
 #include "pluginterfaces/vst/ivstprocesscontext.h"
@@ -474,6 +475,49 @@ int rack_vst3_plugin_initialize(RackVST3Plugin* plugin, double sample_rate, uint
         BusInfo busInfo;
         if (plugin->component->getBusInfo(kAudio, kOutput, 0, busInfo) == kResultOk) {
             plugin->num_output_channels = busInfo.channelCount;
+        }
+    }
+
+    // Deactivate all non-main audio buses (sidechain, aux). Some plugins
+    // declare them as active by default; activating them implicitly via
+    // process_data.prepare() requires us to supply matching buffers which
+    // we don't, and the plugin may abort on the mismatch.
+    for (int32 i = 1; i < numInputBuses; ++i) {
+        plugin->component->activateBus(kAudio, kInput, i, false);
+    }
+    for (int32 i = 1; i < numOutputBuses; ++i) {
+        plugin->component->activateBus(kAudio, kOutput, i, false);
+    }
+
+    // Negotiate bus arrangements with the plugin. Many plugins (notably
+    // commercial instruments) assert/abort in process() if the host never
+    // tells them what speaker layout to use. We propose stereo for any
+    // active bus; for instruments with no main input, we still pass an
+    // empty input array so setBusArrangements knows numIns == 0.
+    {
+        SpeakerArrangement input_arr = SpeakerArr::kStereo;
+        SpeakerArrangement output_arr = SpeakerArr::kStereo;
+        SpeakerArrangement* input_arrs = (numInputBuses > 0) ? &input_arr : nullptr;
+        SpeakerArrangement* output_arrs = (numOutputBuses > 0) ? &output_arr : nullptr;
+        // We deliberately don't bail on failure: plugins may legitimately
+        // refuse the proposed arrangement and the *agreed* one is then
+        // visible via getBusInfo. We just need to have *called* it.
+        plugin->processor->setBusArrangements(
+            input_arrs, numInputBuses > 0 ? 1 : 0,
+            output_arrs, numOutputBuses > 0 ? 1 : 0);
+
+        // Re-read channel counts in case the plugin coerced the arrangement.
+        if (numInputBuses > 0) {
+            BusInfo busInfo;
+            if (plugin->component->getBusInfo(kAudio, kInput, 0, busInfo) == kResultOk) {
+                plugin->num_input_channels = busInfo.channelCount;
+            }
+        }
+        if (numOutputBuses > 0) {
+            BusInfo busInfo;
+            if (plugin->component->getBusInfo(kAudio, kOutput, 0, busInfo) == kResultOk) {
+                plugin->num_output_channels = busInfo.channelCount;
+            }
         }
     }
 
