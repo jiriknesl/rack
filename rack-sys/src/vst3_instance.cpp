@@ -665,18 +665,32 @@ int rack_vst3_plugin_process(
     // Update dynamic fields only (prepare() was called during initialization)
     plugin->process_data.numSamples = frames;
 
-    // Set input buffers
+    // Set input buffers.
+    //
+    // HostProcessData::prepare() (called during initialize) has already
+    // allocated channelBuffers32 as an array of `numChannels` float*
+    // pointers and owns that allocation. If we overwrite the pointer with
+    // our own slice from Rust, prepare()'s destructor will later
+    // `delete[]` a Rust-owned pointer — a heap-corruption bug that
+    // manifests as a malloc abort on plugin drop (or earlier, if the
+    // plugin reads channelBuffers32 past numChannels and writes to the
+    // uninitialized tail of the Rust Vec). Copy element-wise instead.
     if (num_input_channels > 0) {
         AudioBusBuffers& bus = plugin->process_data.inputs[0];
         bus.numChannels = num_input_channels;
-        bus.channelBuffers32 = const_cast<float**>(inputs);
+        for (uint32_t c = 0; c < num_input_channels; ++c) {
+            bus.channelBuffers32[c] = const_cast<float*>(inputs[c]);
+        }
     }
 
-    // Set output buffers
+    // Set output buffers (see input-buffer comment above for why we copy
+    // element-wise instead of overwriting the channelBuffers32 pointer).
     if (num_output_channels > 0) {
         AudioBusBuffers& bus = plugin->process_data.outputs[0];
         bus.numChannels = num_output_channels;
-        bus.channelBuffers32 = const_cast<float**>(outputs);
+        for (uint32_t c = 0; c < num_output_channels; ++c) {
+            bus.channelBuffers32[c] = outputs[c];
+        }
     }
 
     // Set parameter and event interfaces
